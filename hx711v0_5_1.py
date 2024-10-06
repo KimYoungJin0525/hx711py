@@ -3,101 +3,100 @@ import time
 import threading
 
 class HX711:
-
     def __init__(self, dout, pd_sck, gain=128):
-        self.PD_SCK = pd_sck
+        self.PD_SCK = pd_sck  # HX711의 클럭 핀 번호
+        self.DOUT = dout      # HX711의 데이터 출력 핀 번호
 
-        self.DOUT = dout
-
-        # Mutex for reading from the HX711, in case multiple threads in client
-        # software try to access get values from the class at the same time.
+        # 여러 스레드가 동시에 HX711에서 데이터를 읽으려 할 때를 대비한 잠금 객체
         self.readLock = threading.Lock()
         
+        # GPIO 핀 모드 설정 (BCM 모드 사용)
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self.PD_SCK, GPIO.OUT)
-        GPIO.setup(self.DOUT, GPIO.IN)
+        GPIO.setup(self.PD_SCK, GPIO.OUT)  # 클럭 핀을 출력으로 설정
+        GPIO.setup(self.DOUT, GPIO.IN)     # 데이터 핀을 입력으로 설정
 
-        # The value returned by the hx711 that corresponds to your reference
-        # unit AFTER dividing by the SCALE.
+        # 참조 단위 설정 (무게 계산을 위한 기준 값)
         self.REFERENCE_UNIT_A = 1
         self.REFERENCE_UNIT_B = 1
 
+        # 오프셋 설정 (무게 측정의 기준점)
         self.OFFSET_A = 1
         self.OFFSET_B = 1
-        self.lastVal = int(0)
+        self.lastVal = int(0)  # 마지막으로 읽은 값 저장
 
-        self.byteFormat = 'MSB' # 'MSB' or 'LSB'
-        self.bitFormat = 'MSB' # 'MSB' or 'LSB'
+        # 바이트와 비트의 순서 설정 ('MSB' 또는 'LSB')
+        self.byteFormat = 'MSB'
+        self.bitFormat = 'MSB'
         
-        # GAIN must be between 1 and 3. None is an invalid value.
+        # 초기 증폭 설정 (1: 128, 2: 32, 3: 64)
         self.GAIN = None
         self.setGain(gain)
 
-
-        # Think about whether this is necessary.
+        # 초기화 후 안정화를 위해 잠시 대기
         time.sleep(1)
-
-        
-        # Think about whether this is necessary.
         time.sleep(1)
         
+        # 데이터 준비 콜백 설정
         self.readyCallbackEnabled = False
         self.paramCallback = None
         self.lastRawBytes = None
 
-
     def powerDown(self):
-        # Wait for and get the Read Lock, in case another thread is already
-        # driving the HX711 serial interface.
+        """
+        HX711을 절전 모드로 전환합니다.
+        """
+        # 읽기 잠금을 획득하여 다른 스레드가 접근하지 못하게 함
         self.readLock.acquire()
 
-        # Because a rising edge on HX711 Digital Serial Clock (PD_SCK).  We then
-        # leave it held up and wait 100us.  After 60us the HX711 should be
-        # powered down.
+        # 클럭 신호를 상승시켜 HX711을 절전 모드로 전환
         GPIO.output(self.PD_SCK, False)
         GPIO.output(self.PD_SCK, True)
 
+        # 절전 모드로 전환될 때까지 잠시 대기
         time.sleep(0.0001)
 
-        # Release the Read Lock, now that we've finished driving the HX711
-        # serial interface.
-        self.readLock.release()           
-
-
-    def powerUp(self):
-        # Wait for and get the Read Lock, incase another thread is already
-        # driving the HX711 serial interface.
-        self.readLock.acquire()
-
-        # Lower the HX711 Digital Serial Clock (PD_SCK) line.
-        GPIO.output(self.PD_SCK, False)
-
-        # Wait 100 us for the HX711 to power back up.
-        time.sleep(0.0001)
-
-        # Release the Read Lock, now that we've finished driving the HX711
-        # serial interface.
+        # 읽기 잠금을 해제
         self.readLock.release()
 
-        # HX711 will now be defaulted to Channel A with gain of 128.  If this
-        # isn't what client software has requested from us, take a sample and
-        # throw it away, so that next sample from the HX711 will be from the
-        # correct channel/gain.
+    def powerUp(self):
+        """
+        HX711을 절전 모드에서 해제하고 활성화합니다.
+        """
+        # 읽기 잠금을 획득
+        self.readLock.acquire()
+
+        # 클럭 신호를 낮춰 HX711을 활성화
+        GPIO.output(self.PD_SCK, False)
+
+        # HX711이 활성화될 때까지 잠시 대기
+        time.sleep(0.0001)
+
+        # 읽기 잠금을 해제
+        self.readLock.release()
+
+        # 현재 설정된 증폭 값이 128이 아니면, 한 번 샘플을 읽어 설정을 적용
         if self.getGain() != 128:
             self.readRawBytes()
 
-
     def reset(self):
+        """
+        HX711을 재시작(리셋)합니다.
+        """
         self.powerDown()
         self.powerUp()
 
-
     def isReady(self):
+        """
+        HX711이 데이터를 읽을 준비가 되었는지 확인합니다.
+        DOUT 핀이 LOW일 때 준비 완료 상태로 판단합니다.
+        """
         return GPIO.input(self.DOUT) == GPIO.LOW
 
-
     def setGain(self, gain):
-        
+        """
+        HX711의 증폭 설정을 변경합니다.
+        gain: 128, 64, 32 중 하나
+        """
         if gain == 128:
             self.GAIN = 1
         elif gain == 64:
@@ -107,17 +106,19 @@ class HX711:
         else:
             return False
         
-        self.reset()
+        self.reset()  # 설정 변경을 위해 리셋 호출
 
         GPIO.output(self.PD_SCK, False)
 
-        # Read out a set of raw bytes and throw it away.
+        # 초기화 후 첫 데이터를 읽고 무시하여 설정을 적용
         self.readRawBytes()
         
         return True
 
-
     def getGain(self):
+        """
+        현재 설정된 증폭 값을 반환합니다.
+        """
         if self.GAIN == 1:
             return 128
         elif self.GAIN == 3:
@@ -125,10 +126,13 @@ class HX711:
         elif self.GAIN == 2:
             return 32
 
-        raise ValueError("HX711::getGain() gain is currently an invalid value")
-
+        raise ValueError("HX711::getGain() gain이 현재 유효하지 않은 값입니다.")
 
     def setChannel(self, channel='A'):
+        """
+        HX711의 채널을 설정합니다.
+        channel: 'A' 또는 'B'
+        """
         if channel == 'A':
             self.setGain(128)
             return True
@@ -136,182 +140,195 @@ class HX711:
             self.setGain(32)
             return True
         
-        raise ValueError("HX711::setChannel() invalid channel: \"%s\"" % channel)
+        raise ValueError(f"HX711::setChannel() 잘못된 채널: \"{channel}\"")
 
-    
     def getChannel(self):
-        if self.GAIN == 1:
-            return 'A'
-        elif self.GAIN == 3:
+        """
+        현재 설정된 채널을 반환합니다.
+        """
+        if self.GAIN == 1 or self.GAIN == 3:
             return 'A'
         elif self.GAIN == 2:
             return 'B'
         
-        raise ValueError("HX711::getChannel() gain is currently an invalid value")
-
+        raise ValueError("HX711::getChannel() gain이 현재 유효하지 않은 값입니다.")
 
     def readNextBit(self):
-       # Clock HX711 Digital Serial Clock (PD_SCK).  DOUT will be
-       # ready 1us after PD_SCK rising edge, so we sample after
-       # lowering PD_SCL, when we know DOUT will be stable.
-       GPIO.output(self.PD_SCK, True)
-       GPIO.output(self.PD_SCK, False)
-       bitValue = GPIO.input(self.DOUT)
+        """
+        HX711에서 다음 비트를 읽어옵니다.
+        """
+        # 클럭 신호를 상승시켰다가 다시 낮춤
+        GPIO.output(self.PD_SCK, True)
+        GPIO.output(self.PD_SCK, False)
+        bitValue = GPIO.input(self.DOUT)
 
-       # Convert Boolean to int and return it.
-       return int(bitValue)
-
+        # Boolean 값을 정수로 변환하여 반환
+        return int(bitValue)
 
     def readNextByte(self):
-       byteValue = 0
+        """
+        HX711에서 다음 바이트(8비트)를 읽어옵니다.
+        """
+        byteValue = 0
 
-       # Read bits and build the byte from top, or bottom, depending
-       # on whether we are in MSB or LSB bit mode.
-       for x in range(8):
+        # 비트 순서에 따라 바이트 값을 구성
+        for x in range(8):
             if self.bitFormat == 'MSB':
-                # Most significant Byte first.
+                # 상위 비트부터 읽기
                 byteValue <<= 1
                 byteValue |= self.readNextBit()
             else:
-                # Less significant Byte first.
+                # 하위 비트부터 읽기
                 byteValue >>= 1              
                 byteValue |= self.readNextBit() * 0x80
 
-       # Return the packed byte.
-       return byteValue 
-
+        # 구성된 바이트 값을 반환
+        return byteValue 
 
     def readRawBytes(self, blockUntilReady=True):
-        
+        """
+        HX711에서 원시 바이트(3바이트)를 읽어옵니다.
+        blockUntilReady: 데이터가 준비될 때까지 대기할지 여부
+        """
         if self.GAIN is None:
-            raise ValueError("HX711::readRawBytes() called without setting gain first!")
-        
-        # Try to get the Read Lock. If we can't, we lost our opportunity to read.
-        # Though this behaviour is not ideal, it seems key to avoid time consuming interrupt handlers.
-        if self.readLock.acquire(blockUntilReady) is False:
-            # If we couldn't get the lock, it's probably because someone else
-            # is reading the HX711 right now.  We'll just skip this reading and
-            # return None.
+            raise ValueError("HX711::readRawBytes() gain 설정 없이 호출됨!")
+
+        # 읽기 잠금을 시도
+        if not self.readLock.acquire(blockUntilReady):
+            # 잠금을 획득하지 못하면 읽기를 건너뜀
             return None
 
-        # Wait until HX711 is ready for us to read a sample.
-        while self.isReady() is not True:
-           pass
+        # HX711이 데이터를 준비할 때까지 대기
+        while not self.isReady():
+            pass
 
-        # Read three bytes of data from the HX711.
+        # 3바이트의 데이터를 읽어옴
         firstByte  = self.readNextByte()
         secondByte = self.readNextByte()
         thirdByte  = self.readNextByte()
 
-        # HX711 Channel and gain factor are set by number of bits read
-        # after 24 data bits.
+        # 증폭 설정에 따라 추가 클럭 신호를 보냄
         for i in range(self.GAIN):
-           # Clock a bit out of the HX711 and throw it away.
-           self.readNextBit()
+            self.readNextBit()
 
-        # Release the Read Lock, now that we've finished driving the HX711
-        # serial interface.
+        # 읽기 잠금 해제
         self.readLock.release()           
 
-        # Depending on how we're configured, return an orderd list of raw byte values.
+        # 바이트 순서에 따라 원시 데이터를 반환
         if self.byteFormat == 'MSB':
-            # Most significant Byte first.
             return [firstByte, secondByte, thirdByte]
         else:
-            # Less Significant Byte first.
             return [thirdByte, secondByte, firstByte]
 
     def getRawBytes(self, channel='A'):
-        
-        # Get current channel
+        """
+        특정 채널에서 원시 바이트를 읽어옵니다.
+        channel: 'A' 또는 'B'
+        """
+        # 현재 채널을 저장
         currentChannel = self.getChannel()
         
-        # Compare the requested channel with the current channel
+        # 요청한 채널과 현재 채널이 다르면 채널 변경
         if channel != currentChannel:
-            # Temporarily switch to the requested channel
             self.setChannel(channel)
         
         rawBytes = self.readRawBytes()
         
-        # Compare the requested channel with the current channel
+        # 채널을 원래대로 복구
         if channel != currentChannel:
-            # Switch back to the original channel
             self.setChannel(currentChannel)
         
         return rawBytes
 
-
     def getLastRawBytes(self):
+        """
+        마지막으로 읽은 원시 바이트를 반환하고, 저장된 값을 초기화합니다.
+        """
         rawBytes = self.lastRawBytes
         self.lastRawBytes = None
         return rawBytes
 
-
     def readyCallback(self, pin):
-        # Check if the callback is for the DOUT pin.
-        if(pin != self.DOUT):
+        """
+        HX711의 데이터가 준비되었을 때 호출되는 콜백 함수입니다.
+        """
+        # DOUT 핀에 대한 콜백인지 확인
+        if pin != self.DOUT:
             return
         
+        # 원시 데이터를 읽어옴
         self.lastRawBytes = self.readRawBytes(blockUntilReady=False)
+        
+        # 콜백 함수가 설정되어 있으면 호출
         if self.paramCallback is not None:
             self.paramCallback(self.lastRawBytes)
 
-    
     def enableReadyCallback(self, paramCallback=None):
+        """
+        HX711의 데이터 준비 콜백을 활성화합니다.
+        paramCallback: 데이터가 준비되었을 때 호출될 함수
+        """
         self.paramCallback = paramCallback if paramCallback is not None else self.paramCallback
         GPIO.add_event_detect(self.DOUT, GPIO.FALLING, callback=self.readyCallback)
         self.readyCallbackEnabled = True
 
-    
     def disableReadyCallback(self):
+        """
+        HX711의 데이터 준비 콜백을 비활성화합니다.
+        """
         GPIO.remove_event_detect(self.DOUT)
         self.paramCallback = None
         self.readyCallbackEnabled = False
 
-
     def setReadingFormat(self, byteFormat="MSB", bitFormat="MSB"):
+        """
+        읽기 형식을 설정합니다.
+        byteFormat: 'MSB' 또는 'LSB'
+        bitFormat: 'MSB' 또는 'LSB'
+        """
+        if byteFormat not in ['MSB', 'LSB']:
+            raise ValueError(f"HX711::setReadingFormat() 잘못된 byteFormat: '{byteFormat}'")
         
-        if byteFormat != 'MSB' and byteFormat != 'LSB':
-            raise ValueError(f"HX711::setReadingFormat() invalid byteFormat: '{byteFormat}'" )
-        
-        if bitFormat != 'MSB' and bitFormat != 'LSB':
-            raise ValueError(f"HX711::setReadingFormat() invalid bitFormat: '{byteFormat}'" )
+        if bitFormat not in ['MSB', 'LSB']:
+            raise ValueError(f"HX711::setReadingFormat() 잘못된 bitFormat: '{bitFormat}'")
         
         self.byteFormat = byteFormat
         self.bitFormat = bitFormat
 
-    
     def convertFromTwosComplement24bit(self, inputValue):
-        return -(inputValue & 0x800000) + (inputValue & 0x7fffff)
+        """
+        24비트 2의 보수법 값을 부호 있는 정수로 변환합니다.
+        """
+        return -(inputValue & 0x800000) + (inputValue & 0x7FFFFF)
 
-    
     def rawBytesToLong(self, rawBytes=None):
-        
+        """
+        원시 바이트를 정수 값으로 변환합니다.
+        """
         if rawBytes is None:
             return None
 
-        # Join the raw bytes into a single 24bit 2s complement value.
+        # 3바이트를 합쳐 24비트 값을 만듦
         twosComplementValue = ((rawBytes[0] << 16) |
                                (rawBytes[1] << 8)  |
                                rawBytes[2])
         
-        # Convert from 24bit twos-complement to a signed value.
+        # 24비트 2의 보수법 값을 부호 있는 정수로 변환
         signed_int_value = self.convertFromTwosComplement24bit(twosComplementValue)
 
-        # Record the latest sample value we've read.
+        # 마지막 값을 저장
         self.lastVal = signed_int_value
 
-        # Return the sample value we've read from the HX711.
         return int(signed_int_value)
 
-
     def getLong(self, channel='A'):
-                
+        """
+        특정 채널에서 읽은 데이터를 정수 값으로 반환합니다.
+        """
         currentChannel = self.getChannel()
         if channel != currentChannel:
             self.setChannel(channel)
         
-        # Get a sample from the HX711 in the form of raw bytes.
         rawBytes = self.readRawBytes()
         
         if channel != currentChannel:
@@ -322,8 +339,12 @@ class HX711:
         
         return self.rawBytesToLong(rawBytes)
 
-
     def setOffset(self, offset, channel='A'):
+        """
+        특정 채널의 오프셋 값을 설정합니다.
+        offset: 설정할 오프셋 값
+        channel: 'A' 또는 'B'
+        """
         if channel == 'A':
             self.OFFSET_A = offset
             return True
@@ -331,36 +352,47 @@ class HX711:
             self.OFFSET_B = offset
             return True
         
-        raise ValueError("HX711::setOffset() invalid channel: \"%s\"" % channel)
-
+        raise ValueError(f"HX711::setOffset() 잘못된 채널: \"{channel}\"")
 
     def setOffsetA(self, offset):
+        """
+        채널 A의 오프셋 값을 설정합니다.
+        """
         return self.setOffset(offset, 'A')
 
-
     def setOffsetB(self, offset):
+        """
+        채널 B의 오프셋 값을 설정합니다.
+        """
         return self.setOffset(offset, 'B')
 
-
     def getOffset(self, channel='A'):
+        """
+        특정 채널의 오프셋 값을 반환합니다.
+        """
         if channel == 'A':
             return self.OFFSET_A
         elif channel == 'B':
             return self.OFFSET_B
         
-        raise ValueError("HX711::getOffset() invalid channel: \"%s\"" % channel)
-
+        raise ValueError(f"HX711::getOffset() 잘못된 채널: \"{channel}\"")
 
     def getOffsetA(self):
+        """
+        채널 A의 오프셋 값을 반환합니다.
+        """
         return self.getOffset('A')
 
-
     def getOffsetB(self):
+        """
+        채널 B의 오프셋 값을 반환합니다.
+        """
         return self.getOffset('B')
     
-    
     def rawBytesToLongWithOffset(self, rawBytes=None, channel='A'):
-        
+        """
+        원시 바이트를 오프셋을 적용한 정수 값으로 변환합니다.
+        """
         if rawBytes is None:
             return None
         
@@ -368,9 +400,10 @@ class HX711:
         offset = self.getOffset(channel)
         return longValue - offset
 
-
     def getLongWithOffset(self, channel='A'):
-        
+        """
+        특정 채널에서 읽은 데이터를 오프셋을 적용한 정수 값으로 반환합니다.
+        """
         currentChannel = self.getChannel()
         if channel != currentChannel:
             self.setChannel(channel)
@@ -384,9 +417,13 @@ class HX711:
             return None
         
         return self.rawBytesToLongWithOffset(rawBytes, channel)
-    
- 
+
     def setReferenceUnit(self, referenceUnit, channel='A'):
+        """
+        특정 채널의 참조 단위를 설정합니다.
+        referenceUnit: 설정할 참조 단위 값
+        channel: 'A' 또는 'B'
+        """
         if channel == 'A':
             self.REFERENCE_UNIT_A = referenceUnit
             return True
@@ -394,40 +431,47 @@ class HX711:
             self.REFERENCE_UNIT_B = referenceUnit
             return True
         
-        raise ValueError("HX711::setReferenceUnit() invalid channel: \"%s\"" % channel)
-    
-    
+        raise ValueError(f"HX711::setReferenceUnit() 잘못된 채널: \"{channel}\"")
+
     def getReferenceUnit(self, channel='A'):
+        """
+        특정 채널의 참조 단위를 반환합니다.
+        """
         if channel == 'A':
             return self.REFERENCE_UNIT_A
         elif channel == 'B':
             return self.REFERENCE_UNIT_B
         
-        raise ValueError("HX711::getReferenceUnit() invalid channel: \"%s\"" % channel)
+        raise ValueError(f"HX711::getReferenceUnit() 잘못된 채널: \"{channel}\"")
 
-    
     def rawBytesToWeight(self, rawBytes=None, channel='A'):
-        
+        """
+        원시 바이트를 무게 값으로 변환합니다.
+        """
         if rawBytes is None:
             return None
         
+        # 오프셋을 적용한 정수 값으로 변환
         longWithOffset = self.rawBytesToLongWithOffset(rawBytes, channel)
         
+        # 채널에 따라 참조 단위를 선택
         if channel == 'A':
             referenceUnit = self.REFERENCE_UNIT_A
         elif channel == 'B':
             referenceUnit = self.REFERENCE_UNIT_B
         else:
-            raise ValueError("HX711::rawBytesToWeight() invalid channel: \"%s\"" % channel)
+            raise ValueError(f"HX711::rawBytesToWeight() 잘못된 채널: \"{channel}\"")
         
         if referenceUnit == 0:
-            raise ValueError("HX711::rawBytesToWeight() referenceUnit is 0. It isn't possible to divide by zero!")
+            raise ValueError("HX711::rawBytesToWeight() 참조 단위가 0입니다. 0으로 나눌 수 없습니다!")
         
+        # 참조 단위를 나눠 실제 무게 값으로 변환
         return longWithOffset / referenceUnit
 
-    
     def getWeight(self, channel='A'):
-        
+        """
+        특정 채널에서 읽은 데이터를 무게 값으로 반환합니다.
+        """
         currentChannel = self.getChannel()
         if channel != currentChannel:
             self.setChannel(channel)
@@ -442,26 +486,30 @@ class HX711:
         
         return self.rawBytesToWeight(rawBytes, channel)
 
-
     def autosetOffset(self, channel='A'):
-        
+        """
+        자동으로 오프셋 값을 설정합니다.
+        """
         currentReferenceUnit = self.getReferenceUnit(channel)
         
+        # 참조 단위를 1로 설정하여 원시 값을 직접 읽음
         self.setReferenceUnit(1, channel)
         
         currentChannel = self.getChannel()
         if channel != currentChannel:
             self.setChannel(channel)
             
+        # 현재 원시 값을 오프셋으로 설정
         newOffsetValue = self.getLong(channel)
         
         self.setOffset(newOffsetValue, channel)
         
+        # 원래 참조 단위로 복구
         self.setReferenceUnit(currentReferenceUnit, channel)
         
         if channel != currentChannel:
             self.setChannel(currentChannel)
         
         return True
-    
+
 # EOF - hx711.py
