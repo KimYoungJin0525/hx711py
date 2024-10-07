@@ -10,7 +10,7 @@ def cleanAndExit():
     sys.exit()
 
 # 첫 번째 HX711 - 엑셀(Accelerator)
-hx1 = HX711(5, 6)  # 첫 번째 HX711의 데이터 핀과 클럭 핀
+hx1 = HX711(20, 16)  # 첫 번째 HX711의 데이터 핀과 클럭 핀
 
 # 두 번째 HX711 - 브레이크(Brake) 첫번째 완성후 넘어갈것
 # hx2 = HX711(13, 19)  # 두 번째 HX711의 데이터 핀과 클럭 핀
@@ -47,7 +47,7 @@ while True:
         # hx2.power_down()
         hx1.power_up()
         # hx2.power_up()
-        time.sleep(0.1)
+        time.sleep(1)
 
     except (KeyboardInterrupt, SystemExit):
         cleanAndExit()
